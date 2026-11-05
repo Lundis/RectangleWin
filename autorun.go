@@ -26,8 +26,14 @@ const (
 	regKey      = `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
 )
 
+// self returns the quoted absolute path of the running executable, suitable
+// for the Run registry key.
 func self() string {
-	return os.Args[0]
+	p, err := os.Executable()
+	if err != nil {
+		p = os.Args[0]
+	}
+	return `"` + p + `"`
 }
 
 func AutoRunEnabled() (bool, error) {

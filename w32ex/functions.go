@@ -66,3 +66,35 @@ func SetProcessDPIAware() bool {
 	r1, _, _ := user32.NewProc("SetProcessDPIAware").Call()
 	return r1 != 0
 }
+
+var kernel32 = syscall.NewLazyDLL("kernel32.dll")
+
+// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+const dpiAwarenessContextPerMonitorAwareV2 = ^uintptr(3) // (HANDLE)-4
+
+// SetProcessDpiAwarenessPerMonitorV2 makes all coordinates (GetWindowRect,
+// monitor rects, DWM frame bounds) physical pixels, which is what we need to
+// move windows between monitors with different scaling. Requires Win10 1703+.
+func SetProcessDpiAwarenessPerMonitorV2() bool {
+	proc := user32.NewProc("SetProcessDpiAwarenessContext")
+	if proc.Find() != nil {
+		return false
+	}
+	r1, _, _ := proc.Call(dpiAwarenessContextPerMonitorAwareV2)
+	return r1 != 0
+}
+
+func GetCurrentThreadId() uint32 {
+	r1, _, _ := kernel32.NewProc("GetCurrentThreadId").Call()
+	return uint32(r1)
+}
+
+func PostThreadMessage(threadID uint32, msg uint32, wParam, lParam uintptr) bool {
+	r1, _, _ := user32.NewProc("PostThreadMessageW").Call(uintptr(threadID), uintptr(msg), wParam, lParam)
+	return r1 != 0
+}
+
+func IsZoomed(hwnd w32.HWND) bool {
+	r1, _, _ := user32.NewProc("IsZoomed").Call(uintptr(hwnd))
+	return r1 != 0
+}

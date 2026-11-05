@@ -25,22 +25,18 @@ only using hotkeys:
 
 ## Keyboard Bindings
 
-- **Snap to edges** (left/right/top/bottom ½, ⅔, ⅓):
-  - <kbd>Win</kbd> + <kbd>Alt</kbd> + <kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd>
-  - Press multiple times to alternate between ½, ⅔ and ⅓.
+- <kbd>Win</kbd> + <kbd>&larr;</kbd> / <kbd>&rarr;</kbd>: snap to the left/right half of
+  the current monitor. Pressing again only moves to another monitor if one sits
+  directly beside it (a monitor stacked above/below is never chosen).
+- <kbd>Win</kbd> + <kbd>&uarr;</kbd> / <kbd>&darr;</kbd>: move the window to the monitor
+  above/below, keeping its relative position, size and maximized state.
+- <kbd>Win</kbd> + <kbd>Enter</kbd>: toggle maximized.
+- <kbd>Win</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd>: center window.
+- <kbd>Win</kbd> + <kbd>Alt</kbd> + <kbd>A</kbd>: toggle always on top.
 
-- **Corner snapping**
-  - <kbd>Win</kbd> + <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>&larr;</kbd>: top-left ½, ⅔ and ⅓
-  - <kbd>Win</kbd> + <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>&uarr;</kbd>: top-right ½, ⅔ and ⅓
-  - <kbd>Win</kbd> + <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>&darr;</kbd>: bottom-left ½, ⅔ and ⅓
-  - <kbd>Win</kbd> + <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>&rarr;</kbd>: bottom-right ½, ⅔ and ⅓
-
-- **Center window** on the display: <kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>C</kbd>
-
-- **Maximize window**: <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd>
-  (Obsolete since Windows natively supports <kbd>Win</kbd>+<kbd>&uarr;</kbd>)
-
-- **Always On Top (toggle)**: <kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd>
+These replace the built-in Windows Snap shortcuts while RectangleWin is running
+(they are captured with a low-level keyboard hook, since Windows does not let
+other programs register Win+Arrow as hotkeys).
 
 ## Why?
 
