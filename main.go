@@ -31,13 +31,17 @@ import (
 	"github.com/ahmetb/RectangleWin/w32ex"
 )
 
-var lastResized w32.HWND
+// perMonitorDPI is true when the process runs as per-monitor (v2) DPI aware,
+// in which case every coordinate we deal with is in physical pixels.
+var perMonitorDPI bool
 
 func main() {
 	runtime.LockOSThread() // since we bind hotkeys etc that need to dispatch their message here
-	if !w32ex.SetProcessDPIAware() {
+	perMonitorDPI = w32ex.SetProcessDpiAwarenessPerMonitorV2()
+	if !perMonitorDPI && !w32ex.SetProcessDPIAware() {
 		panic("failed to set DPI aware")
 	}
+	fmt.Printf("per-monitor DPI aware=%v\n", perMonitorDPI)
 
 	autorun, err := AutoRunEnabled()
 	if err != nil {
@@ -46,60 +50,27 @@ func main() {
 	fmt.Printf("autorun enabled=%v\n", autorun)
 	printMonitors()
 
-	edgeFuncs := [][]resizeFunc{
-		{leftHalf, leftTwoThirds, leftOneThirds},
-		{rightHalf, rightTwoThirds, rightOneThirds},
-		{topHalf, topTwoThirds, topOneThirds},
-		{bottomHalf, bottomTwoThirds, bottomOneThirds}}
-	edgeFuncTurn := make([]int, len(edgeFuncs))
-	cornerFuncs := [][]resizeFunc{
-		{topLeftHalf, topLeftTwoThirds, topLeftOneThirds},
-		{topRightHalf, topRightTwoThirds, topRightOneThirds},
-		{bottomLeftHalf, bottomLeftTwoThirds, bottomLeftOneThirds},
-		{bottomRightHalf, bottomRightTwoThirds, bottomRightOneThirds}}
-	cornerFuncTurn := make([]int, len(cornerFuncs))
-
-	cycleFuncs := func(funcs [][]resizeFunc, turns *[]int, i int) {
-		hwnd := w32.GetForegroundWindow()
-		if hwnd == 0 {
-			panic("foreground window is NULL")
-		}
-		if lastResized != hwnd {
-			*turns = make([]int, len(edgeFuncs)) // reset
-		}
-		if _, err := resize(hwnd, funcs[i][(*turns)[i]%len(funcs[i])]); err != nil {
-			fmt.Printf("warn: resize: %v\n", err)
-			return
-		}
-		(*turns)[i]++
-		for j := 0; j < len(*turns); j++ {
-			if j != i {
-				(*turns)[j] = 0
+	// Win+Arrow and Win+Enter are reserved by Windows, so they go through a
+	// low-level keyboard hook instead of RegisterHotKey.
+	logErr := func(name string, f func() error) func() {
+		return func() {
+			if err := f(); err != nil {
+				fmt.Printf("warn: %s: %v\n", name, err)
 			}
 		}
 	}
-
-	cycleEdgeFuncs := func(i int) { cycleFuncs(edgeFuncs, &edgeFuncTurn, i) }
-	cycleCornerFuncs := func(i int) { cycleFuncs(cornerFuncs, &cornerFuncTurn, i) }
+	RegisterWinKeyHook(1, w32.VK_LEFT, logErr("snap left", func() error { return snapHalf(dirLeft) }))
+	RegisterWinKeyHook(2, w32.VK_RIGHT, logErr("snap right", func() error { return snapHalf(dirRight) }))
+	RegisterWinKeyHook(3, w32.VK_UP, logErr("move up", func() error { return moveToMonitor(dirUp) }))
+	RegisterWinKeyHook(4, w32.VK_DOWN, logErr("move down", func() error { return moveToMonitor(dirDown) }))
+	RegisterWinKeyHook(5, w32.VK_RETURN, logErr("fullscreen", toggleMaximize))
+	if err := InstallKeyHook(); err != nil {
+		showMessageBox("Failed to install keyboard hook: " + err.Error())
+		panic(err)
+	}
 
 	hks := []HotKey{
-		(HotKey{id: 1, mod: MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_LEFT, callback: func() { cycleEdgeFuncs(0) }}),
-		(HotKey{id: 2, mod: MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_RIGHT, callback: func() { cycleEdgeFuncs(1) }}),
-		(HotKey{id: 3, mod: MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_UP, callback: func() { cycleEdgeFuncs(2) }}),
-		(HotKey{id: 4, mod: MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_DOWN, callback: func() { cycleEdgeFuncs(3) }}),
-		(HotKey{id: 5, mod: MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_LEFT, callback: func() { cycleCornerFuncs(0) }}),
-		(HotKey{id: 6, mod: MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_UP, callback: func() { cycleCornerFuncs(1) }}),
-		(HotKey{id: 7, mod: MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_DOWN, callback: func() { cycleCornerFuncs(2) }}),
-		(HotKey{id: 8, mod: MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_RIGHT, callback: func() { cycleCornerFuncs(3) }}),
-		(HotKey{id: 50, mod: MOD_SHIFT | MOD_WIN, vk: 0x46 /*F*/, callback: func() {
-			lastResized = 0 // cause edgeFuncTurn to be reset
-			if err := maximize(); err != nil {
-				fmt.Printf("warn: maximize: %v\n", err)
-				return
-			}
-		}}),
 		(HotKey{id: 60, mod: MOD_ALT | MOD_WIN, vk: 0x43 /*C*/, callback: func() {
-			lastResized = 0 // cause edgeFuncTurn to be reset
 			if _, err := resize(w32.GetForegroundWindow(), center); err != nil {
 				fmt.Printf("warn: resize: %v\n", err)
 				return
@@ -130,7 +101,7 @@ func main() {
 		showMessageBox(msg)
 	}
 
-	exitCh := make(chan os.Signal)
+	exitCh := make(chan os.Signal, 1)
 	signal.Notify(exitCh, os.Interrupt)
 	go func() {
 		<-exitCh
@@ -166,32 +137,49 @@ func center(disp, cur w32.RECT) w32.RECT {
 }
 
 func resize(hwnd w32.HWND, f resizeFunc) (bool, error) {
+	return resizeOn(hwnd, 0, f)
+}
+
+// windowFrame returns the visible frame of the window (excluding the invisible
+// resize borders) in the same coordinate space as GetWindowRect.
+func windowFrame(hwnd w32.HWND) (w32.RECT, error) {
+	ok, frame := w32.DwmGetWindowAttributeEXTENDED_FRAME_BOUNDS(hwnd)
+	if !ok {
+		return w32.RECT{}, fmt.Errorf("failed to DwmGetWindowAttributeEXTENDED_FRAME_BOUNDS:%d", w32.GetLastError())
+	}
+	if perMonitorDPI {
+		return frame, nil // DWM bounds are physical pixels, same as GetWindowRect
+	}
+	hdc := w32.GetDC(hwnd)
+	displayDPI := w32.GetDeviceCaps(hdc, w32.LOGPIXELSY)
+	if !w32.ReleaseDC(hwnd, hdc) {
+		return w32.RECT{}, fmt.Errorf("failed to ReleaseDC:%d", w32.GetLastError())
+	}
+	return resizeForDpi(frame, w32ex.GetDpiForWindow(hwnd), int32(displayDPI)), nil
+}
+
+// resizeOn positions hwnd at f(workArea, currentFrame). The work area is that
+// of monitor mon, or of the window's current monitor if mon is 0.
+func resizeOn(hwnd w32.HWND, mon w32.HMONITOR, f resizeFunc) (bool, error) {
 	if !isZonableWindow(hwnd) {
 		fmt.Printf("warn: non-zonable window: %s\n", w32.GetWindowText(hwnd))
 		return false, nil
 	}
 	rect := w32.GetWindowRect(hwnd)
-	mon := w32.MonitorFromWindow(hwnd, w32.MONITOR_DEFAULTTONEAREST)
-	hdc := w32.GetDC(hwnd)
-	displayDPI := w32.GetDeviceCaps(hdc, w32.LOGPIXELSY)
-	if !w32.ReleaseDC(hwnd, hdc) {
-		return false, fmt.Errorf("failed to ReleaseDC:%d", w32.GetLastError())
+	if mon == 0 {
+		mon = w32.MonitorFromWindow(hwnd, w32.MONITOR_DEFAULTTONEAREST)
 	}
 	var monInfo w32.MONITORINFO
 	if !w32.GetMonitorInfo(mon, &monInfo) {
 		return false, fmt.Errorf("failed to GetMonitorInfo:%d", w32.GetLastError())
 	}
-
-	ok, frame := w32.DwmGetWindowAttributeEXTENDED_FRAME_BOUNDS(hwnd)
-	if !ok {
-		return false, fmt.Errorf("failed to DwmGetWindowAttributeEXTENDED_FRAME_BOUNDS:%d", w32.GetLastError())
+	resizedFrame, err := windowFrame(hwnd)
+	if err != nil {
+		return false, err
 	}
-	windowDPI := w32ex.GetDpiForWindow(hwnd)
-	resizedFrame := resizeForDpi(frame, int32(windowDPI), int32(displayDPI))
 
-	fmt.Printf("> window: 0x%x %#v (w:%d,h:%d) mon=0x%X(@ display DPI:%d)\n", hwnd, rect, rect.Width(), rect.Height(), mon, displayDPI)
-	fmt.Printf("> DWM frame:        %#v (W:%d,H:%d) @ window DPI=%v\n", frame, frame.Width(), frame.Height(), windowDPI)
-	fmt.Printf("> DPI-less frame:   %#v (W:%d,H:%d)\n", resizedFrame, resizedFrame.Width(), resizedFrame.Height())
+	fmt.Printf("> window: 0x%x %#v (w:%d,h:%d) mon=0x%X\n", hwnd, rect, rect.Width(), rect.Height(), mon)
+	fmt.Printf("> frame:  %#v (W:%d,H:%d)\n", resizedFrame, resizedFrame.Width(), resizedFrame.Height())
 
 	// calculate how many extra pixels go to win10 invisible borders
 	lExtra := resizedFrame.Left - rect.Left
@@ -207,7 +195,6 @@ func resize(hwnd w32.HWND, f resizeFunc) (bool, error) {
 	newPos.Right += rExtra
 	newPos.Bottom += bExtra
 
-	lastResized = hwnd
 	if sameRect(rect, &newPos) {
 		fmt.Println("no resize")
 		return false, nil
@@ -225,15 +212,103 @@ func resize(hwnd w32.HWND, f resizeFunc) (bool, error) {
 	return true, nil
 }
 
-func maximize() error {
+func toggleMaximize() error {
 	hwnd := w32.GetForegroundWindow()
 	if !isZonableWindow(hwnd) {
 		return errors.New("foreground window is not zonable")
 	}
-	if !w32.ShowWindow(hwnd, w32.SW_MAXIMIZE) {
-		return fmt.Errorf("failed to ShowWindow:%d", w32.GetLastError())
+	cmd := w32.SW_MAXIMIZE
+	if w32ex.IsZoomed(hwnd) {
+		cmd = w32.SW_RESTORE
+	}
+	w32.ShowWindow(hwnd, cmd) // return value is the previous visibility, not success
+	return nil
+}
+
+// snapHalf puts the window on the left/right half of its monitor. If it is
+// already there and a monitor exists on that side (side by side, not stacked),
+// it continues onto the near half of that monitor.
+func snapHalf(dir direction) error {
+	hwnd := w32.GetForegroundWindow()
+	if !isZonableWindow(hwnd) {
+		return errors.New("foreground window is not zonable")
+	}
+	half, opposite := resizeFunc(leftHalf), resizeFunc(rightHalf)
+	if dir == dirRight {
+		half, opposite = rightHalf, leftHalf
+	}
+
+	var monInfo w32.MONITORINFO
+	if !w32.GetMonitorInfo(w32.MonitorFromWindow(hwnd, w32.MONITOR_DEFAULTTONEAREST), &monInfo) {
+		return fmt.Errorf("failed to GetMonitorInfo:%d", w32.GetLastError())
+	}
+	frame, err := windowFrame(hwnd)
+	if err != nil {
+		return err
+	}
+	if !w32ex.IsZoomed(hwnd) && closeRect(frame, half(monInfo.RcWork, frame), 2) {
+		if next, ok := neighborMonitor(monInfo.RcMonitor, listMonitors(), dir); ok {
+			return placeOnMonitor(hwnd, next.handle, opposite(next.work, frame), false)
+		}
+		return nil
+	}
+	_, err = resize(hwnd, half)
+	return err
+}
+
+// moveToMonitor moves the window to the neighbouring monitor in dir, keeping
+// its relative position and size (and maximized state).
+func moveToMonitor(dir direction) error {
+	hwnd := w32.GetForegroundWindow()
+	if !isZonableWindow(hwnd) {
+		return errors.New("foreground window is not zonable")
+	}
+	var monInfo w32.MONITORINFO
+	if !w32.GetMonitorInfo(w32.MonitorFromWindow(hwnd, w32.MONITOR_DEFAULTTONEAREST), &monInfo) {
+		return fmt.Errorf("failed to GetMonitorInfo:%d", w32.GetLastError())
+	}
+	next, ok := neighborMonitor(monInfo.RcMonitor, listMonitors(), dir)
+	if !ok {
+		fmt.Println("no monitor in that direction")
+		return nil
+	}
+	maximized := w32ex.IsZoomed(hwnd)
+	target := next.work
+	if !maximized {
+		frame, err := windowFrame(hwnd)
+		if err != nil {
+			return err
+		}
+		target = mapRect(frame, monInfo.RcWork, next.work)
+	}
+	return placeOnMonitor(hwnd, next.handle, target, maximized)
+}
+
+// placeOnMonitor moves the window's visible frame to target on monitor mon.
+// It runs twice because a window crossing to a monitor with a different scale
+// factor may resize itself in response to WM_DPICHANGED.
+func placeOnMonitor(hwnd w32.HWND, mon w32.HMONITOR, target w32.RECT, maximize bool) error {
+	to := func(_, _ w32.RECT) w32.RECT { return target }
+	for i := 0; i < 2; i++ {
+		if _, err := resizeOn(hwnd, mon, to); err != nil {
+			return err
+		}
+	}
+	if maximize {
+		w32.ShowWindow(hwnd, w32.SW_MAXIMIZE)
 	}
 	return nil
+}
+
+func closeRect(a, b w32.RECT, tolerance int32) bool {
+	abs := func(v int32) int32 {
+		if v < 0 {
+			return -v
+		}
+		return v
+	}
+	return abs(a.Left-b.Left) <= tolerance && abs(a.Top-b.Top) <= tolerance &&
+		abs(a.Right-b.Right) <= tolerance && abs(a.Bottom-b.Bottom) <= tolerance
 }
 
 func toggleAlwaysOnTop(hwnd w32.HWND) error {
